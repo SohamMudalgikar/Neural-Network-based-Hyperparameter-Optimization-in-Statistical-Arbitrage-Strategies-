@@ -53,3 +53,9 @@ def optimize_agent(trial):
             break
 
     return total_reward
+
+# Run the Optimization
+study = optuna.create_study(direction='maximize')
+study.optimize(optimize_agent, n_trials=10)
+
+print('Best hyperparameters: ', study.best_params)
