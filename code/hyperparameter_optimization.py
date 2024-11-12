@@ -1,36 +1,37 @@
 # We will use Optuna for Bayesian optimization to find the best hyperparameters for the PPO agent.
-def optimize_agent(trial):
-    """Optimize PPO hyperparameters using Optuna"""
 
-    # Hyperparameters to tune
-    n_steps = trial.suggest_int('n_steps', 128, 2048)
+import optuna
+import torch as th
+from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import DummyVecEnv
+from trading_env import TradingEnv
+import pandas as pd
+
+def optimize_agent(trial):
+    n_steps = trial.suggest_int('n_steps', 1024, 2048, step=256)
     gamma = trial.suggest_float('gamma', 0.9, 0.9999)
-    learning_rate = trial.suggest_float('learning_rate', 1e-5, 1, log=True)
-    ent_coef = trial.suggest_float('ent_coef', 1e-8, 0.1, log=True)
+    learning_rate = trial.suggest_float('learning_rate', 1e-5, 1e-2, log=True)
+    ent_coef = trial.suggest_float('ent_coef', 1e-8, 1e-2, log=True)
     clip_range = trial.suggest_float('clip_range', 0.1, 0.4)
     gae_lambda = trial.suggest_float('gae_lambda', 0.8, 1.0)
 
-    # policy_kwargs = dict(
-    #     activation_fn=th.nn.Tanh,
-    #     net_arch=[dict(pi=[64, 64], vf=[64, 64])]
-    # )
-
-    # Modify policy_kwargs
     policy_kwargs = dict(
-        activation_fn=th.nn.ReLU,
-        net_arch=[dict(pi=[128, 128, 64], vf=[128, 128, 64])]
+        activation_fn=th.nn.Tanh,
+        net_arch=dict(pi=[64, 64], vf=[64, 64])
     )
 
-    # Create environment
+    data = pd.read_csv('data/processed_data.csv')
     env = DummyVecEnv([lambda: TradingEnv(data)])
 
-    # Initialize the agent
+    # Adjust batch_size to be a factor of n_steps
+    batch_size = 256
+
     model = PPO(
         "MlpPolicy",
         env,
         verbose=0,
-        tensorboard_log="./tensorboard/",
         n_steps=n_steps,
+        batch_size=batch_size,
         gamma=gamma,
         learning_rate=learning_rate,
         ent_coef=ent_coef,
@@ -39,23 +40,24 @@ def optimize_agent(trial):
         policy_kwargs=policy_kwargs
     )
 
-    # Train the agent
-    model.learn(total_timesteps=10000)
+    model.learn(total_timesteps=20000)
 
     # Evaluate the agent
     obs = env.reset()
     total_reward = 0
-    for i in range(len(data) - 1):
-        action, _states = model.predict(obs)
-        obs, rewards, done, info = env.step(action)
-        total_reward += rewards
-        if done:
-            break
+    done = False
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, rewards, dones, infos = env.step(action)
+        total_reward += rewards[0]
+        done = dones[0]
 
-    return total_reward
+    return float(total_reward)
 
-# Run the Optimization
-study = optuna.create_study(direction='maximize')
-study.optimize(optimize_agent, n_trials=10)
-
-print('Best hyperparameters: ', study.best_params)
+if __name__ == "__main__":
+    study = optuna.create_study(direction='maximize')
+    study.optimize(optimize_agent, n_trials=20)
+    print('Best hyperparameters: ', study.best_params)
+    # Save the best hyperparameters
+    with open('results/best_hyperparameters.txt', 'w') as f:
+        f.write(str(study.best_params))
